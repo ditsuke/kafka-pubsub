@@ -2,8 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"github.com/segmentio/kafka-go"
 	"kafka-task"
 	"log"
 	"os"
@@ -33,21 +31,5 @@ func main() {
 	}
 
 	log.Printf("configured: %+v\n", cfg)
-
-	// test connection
-	k, err := kafka.Dial("tcp", "localhost:9092")
-	if err != nil {
-		panic(err)
-	}
-	defer func() { _ = k.Close() }()
-	fmt.Println("connected to kafka broker")
-	err = k.CreateTopics(kafka.TopicConfig{
-		Topic:             cfg.Topic,
-		NumPartitions:     cfg.Partitions,
-		ReplicationFactor: 1,
-	})
-	if err != nil {
-		panic(fmt.Errorf("failed to create topic: %v", err))
-	}
 	kafka_task.WriteToKafka(cfg)
 }

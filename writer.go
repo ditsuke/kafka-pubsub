@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/segmentio/kafka-go"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"log"
 	"strconv"
 	"sync"
@@ -14,7 +16,7 @@ import (
 const (
 	maxRetriesInternal = 10
 	maxRetriesExplicit = 5
-	electionWait       = 250 * time.Millisecond
+	waitOnWriteFailure = 250 * time.Millisecond
 )
 
 type Config struct {
@@ -35,34 +37,34 @@ type Config struct {
 	BatchSize int
 }
 
+// WriteToKafka writes a series of messages to a kafka topic as directed through the Config passed.
 func WriteToKafka(cfg Config) {
-	// Create producer ===
-	writer := kafka.Writer{
-		Addr:                   kafka.TCP(fmt.Sprintf("%s:%d", cfg.KafkaHost, cfg.KafkaPort)),
-		Topic:                  cfg.Topic,
-		RequiredAcks:           1,
-		AllowAutoTopicCreation: true,
-		MaxAttempts:            maxRetriesInternal,
-		Balancer: kafka.BalancerFunc(func(message kafka.Message, i ...int) int {
-			// Use a custom balancer to balance between partitions
-			// Essentially, this balancer behaves like the round-robin balancer, but only
-			// it will map a message key to the same partition, which is useful for consistent partitioning in
-			// case of failures.
-			l := len(i)
-			key, err := strconv.Atoi(string(message.Key))
-			if err != nil {
-				panic("key is not an integer")
-			}
-			return i[key%l]
-		}),
+	brokerSeeds := []string{fmt.Sprintf("%s:%d", cfg.KafkaHost, cfg.KafkaPort)}
+
+	// Create a kafka client.
+	// Producer idempotence is enabled by default (!)
+	k, err := kgo.NewClient(
+		kgo.SeedBrokers(brokerSeeds...),
+		kgo.DefaultProduceTopic(cfg.Topic),
+		kgo.RecordRetries(maxRetriesInternal),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	if err != nil {
+		panic(fmt.Errorf("failed to create kafka client: %v", err))
 	}
+	log.Println("connected to kafka broker")
+	defer k.Close()
+
+	// Create cfg.Topic if it doesn't exist.
+	CreateTopic(k, cfg)
+
 	// Concurrently write messages to each kafka partition, independently.
 	// This strategy ensures maximum throughput while still allow us to guarantee message ordering within each partition
 	wg := sync.WaitGroup{}
 	for i := 0; i < cfg.Partitions; i++ {
 		wg.Add(1)
 		go func(i int) {
-			WriteNumbersToPartition(i, &writer, cfg)
+			WriteNumbersToPartition(i, k, cfg)
 			wg.Done()
 		}(i)
 	}
@@ -70,42 +72,52 @@ func WriteToKafka(cfg Config) {
 	wg.Wait()
 }
 
-func WriteNumbersToPartition(i int, writer *kafka.Writer, cfg Config) {
-	for j := i; j < cfg.EventCount; j += WriteMessageBatchWithRetries(j, writer, cfg) * cfg.Partitions {
+// CreateTopic creates cfg.Topic if it doesn't exist.
+func CreateTopic(k *kgo.Client, cfg Config) {
+	adminClient := kadm.NewClient(k)
+	response, err := adminClient.CreateTopics(context.Background(), int32(cfg.Partitions), 1, nil, cfg.Topic)
+	if rErr := response[cfg.Topic].Err; err != nil || rErr != nil && !errors.Is(rErr, kerr.TopicAlreadyExists) {
+		panic(fmt.Errorf("failed to create topic: issue_error=%v, creation_error=%+v", err, rErr))
+	}
+}
+
+func WriteNumbersToPartition(i int, kClient *kgo.Client, cfg Config) {
+	for j := i; j < cfg.EventCount; j += WriteMessageBatchWithRetries(j, kClient, cfg) * cfg.Partitions {
 	}
 }
 
 // WriteMessageBatchWithRetries writes a batch of messages to a kafka writer with a retry policy. On failure after maxRetriesInternal,
 // the function will panic. On success, the function returns the number of messages written to make sure the next batch's offset is adjusted.
-func WriteMessageBatchWithRetries(startFrom int, writer *kafka.Writer, cfg Config) int {
-	messageBatch := makeMessageBatch(cfg.BatchSize, startFrom, cfg.Partitions, cfg.EventCount)
+func WriteMessageBatchWithRetries(start int, kClient *kgo.Client, cfg Config) int {
+	messageBatch := packMessageBatch(cfg.BatchSize, start, cfg.Partitions, cfg.EventCount, func(messageNumber int) int32 {
+		return int32(messageNumber % cfg.Partitions)
+	})
+
 	for i := 0; i < maxRetriesExplicit; i++ {
-		// @todo: if retrying a message, we must peek at the partition to see if its already been written
-		err := writer.WriteMessages(context.Background(), messageBatch...)
-		if err == nil {
-			log.Printf("wrote messages: %d, %d, ... %d \n", startFrom, startFrom+cfg.Partitions, startFrom+(len(messageBatch)-1)*cfg.Partitions)
+		results := kClient.ProduceSync(context.Background(), messageBatch...)
+		// If the first result is nil, then we've successfully written the batch.
+		if results[0].Err == nil {
+			log.Printf("wrote batch: %d, %d, ... %d", start, start+cfg.Partitions, start+cfg.Partitions*(len(messageBatch)-1))
 			return len(messageBatch)
 		}
-		if errors.Is(err, kafka.LeaderNotAvailable) || errors.Is(err, kafka.UnknownTopicOrPartition) {
-			log.Println("leader not available, waiting for election")
-			time.Sleep(electionWait)
-			continue
-		}
-		panic(fmt.Errorf("failed to match error type: %v", err))
+		log.Printf("failed to write batch. retrying after waiting...")
+		time.Sleep(waitOnWriteFailure)
 	}
 	panic("failed to write message after retries")
 }
 
-func makeMessageBatch(batchSize, startFrom, gap, eventLimit int) []kafka.Message {
-	messages := make([]kafka.Message, batchSize)
-	for i := 0; i < batchSize; i++ {
-		messageNumber := startFrom + i*gap
-		if messageNumber >= eventLimit {
+// packMessageBatch packs a batch of messages to send through to a broker.
+func packMessageBatch(size, start, jump, limit int, partitioner func(messageNumber int) int32) []*kgo.Record {
+	messages := make([]*kgo.Record, size)
+	for i := 0; i < size; i++ {
+		messageNumber := start + i*jump
+		if messageNumber >= limit {
 			return messages[:i]
 		}
-		messages[i] = kafka.Message{
-			Value: []byte(strconv.Itoa(messageNumber)),
-			Key:   []byte(strconv.Itoa(messageNumber)),
+		messages[i] = &kgo.Record{
+			Value:     []byte(strconv.Itoa(messageNumber)),
+			Key:       []byte(strconv.Itoa(messageNumber)),
+			Partition: partitioner(messageNumber),
 		}
 	}
 	return messages
