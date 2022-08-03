@@ -17,7 +17,7 @@ const (
 )
 
 func main() {
-	var cfg ps.Config
+	var cfg ps.PubOptions
 	flags := flag.NewFlagSet("", flag.ExitOnError)
 	flags.StringVar(&cfg.KafkaHost, "kafka-host", defaultKafkaHost, "kafka host")
 	flags.IntVar(&cfg.KafkaPort, "kafka-port", defaultKafkaPort, "kafka port")

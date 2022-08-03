@@ -19,33 +19,15 @@ const (
 	waitOnWriteFailure = 250 * time.Millisecond
 )
 
-type Config struct {
-	KafkaHost string
-	KafkaPort int
-
-	// Topic is the kafka topic to write to.
-	Topic string
-
-	// Partitions is the number of partitions we divide the topic into.
-	Partitions int
-
-	// EventCount is the total number of events to write to Kafka.
-	EventCount int
-
-	// BatchSize is the number of messages we batch together while writing to kafka. An optimal batch size
-	// maximised throughput.
-	BatchSize int
-}
-
-// WriteToKafka writes a series of messages to a kafka topic as directed through the Config passed.
-func WriteToKafka(cfg Config) {
-	brokerSeeds := []string{fmt.Sprintf("%s:%d", cfg.KafkaHost, cfg.KafkaPort)}
+// WriteToKafka writes a series of messages to a kafka topic as directed through the Options passed.
+func WriteToKafka(opts PubOptions) {
+	brokerSeeds := []string{fmt.Sprintf("%s:%d", opts.KafkaHost, opts.KafkaPort)}
 
 	// Create a kafka client.
 	// Producer idempotence is enabled by default (!)
 	k, err := kgo.NewClient(
 		kgo.SeedBrokers(brokerSeeds...),
-		kgo.DefaultProduceTopic(cfg.Topic),
+		kgo.DefaultProduceTopic(opts.Topic),
 		kgo.RecordRetries(maxRetriesInternal),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 	)
@@ -55,16 +37,16 @@ func WriteToKafka(cfg Config) {
 	log.Println("connected to kafka broker")
 	defer k.Close()
 
-	// Create cfg.Topic if it doesn't exist.
-	CreateTopic(k, cfg)
+	// Create opts.Topic if it doesn't exist.
+	CreateTopic(k, opts)
 
 	// Concurrently write messages to each kafka partition, independently.
 	// This strategy ensures maximum throughput while still allow us to guarantee message ordering within each partition
 	wg := sync.WaitGroup{}
-	for i := 0; i < cfg.Partitions; i++ {
+	for i := 0; i < opts.Partitions; i++ {
 		wg.Add(1)
 		go func(i int) {
-			WriteNumbersToPartition(i, k, cfg)
+			WriteNumbersToPartition(i, k, opts)
 			wg.Done()
 		}(i)
 	}
@@ -72,32 +54,32 @@ func WriteToKafka(cfg Config) {
 	wg.Wait()
 }
 
-// CreateTopic creates cfg.Topic if it doesn't exist.
-func CreateTopic(k *kgo.Client, cfg Config) {
+// CreateTopic creates opts.Topic if it doesn't exist.
+func CreateTopic(k *kgo.Client, opts PubOptions) {
 	adminClient := kadm.NewClient(k)
-	response, err := adminClient.CreateTopics(context.Background(), int32(cfg.Partitions), 1, nil, cfg.Topic)
-	if rErr := response[cfg.Topic].Err; err != nil || rErr != nil && !errors.Is(rErr, kerr.TopicAlreadyExists) {
+	response, err := adminClient.CreateTopics(context.Background(), int32(opts.Partitions), 1, nil, opts.Topic)
+	if rErr := response[opts.Topic].Err; err != nil || rErr != nil && !errors.Is(rErr, kerr.TopicAlreadyExists) {
 		panic(fmt.Errorf("failed to create topic: issue_error=%v, creation_error=%+v", err, rErr))
 	}
 }
 
-func WriteNumbersToPartition(i int, kClient *kgo.Client, cfg Config) {
-	for j := i; j < cfg.EventCount; j += WriteMessageBatchWithRetries(j, kClient, cfg) * cfg.Partitions {
+func WriteNumbersToPartition(i int, kClient *kgo.Client, opts PubOptions) {
+	for j := i; j < opts.EventCount; j += WriteMessageBatchWithRetries(j, kClient, opts) * opts.Partitions {
 	}
 }
 
 // WriteMessageBatchWithRetries writes a batch of messages to a kafka writer with a retry policy. On failure after maxRetriesInternal,
 // the function will panic. On success, the function returns the number of messages written to make sure the next batch's offset is adjusted.
-func WriteMessageBatchWithRetries(start int, kClient *kgo.Client, cfg Config) int {
-	messageBatch := packMessageBatch(cfg.BatchSize, start, cfg.Partitions, cfg.EventCount, func(messageNumber int) int32 {
-		return int32(messageNumber % cfg.Partitions)
+func WriteMessageBatchWithRetries(start int, kClient *kgo.Client, opts PubOptions) int {
+	messageBatch := packMessageBatch(opts.BatchSize, start, opts.Partitions, opts.EventCount, func(messageNumber int) int32 {
+		return int32(messageNumber % opts.Partitions)
 	})
 
 	for i := 0; i < maxRetriesExplicit; i++ {
 		results := kClient.ProduceSync(context.Background(), messageBatch...)
 		// If the first result is nil, then we've successfully written the batch.
 		if results[0].Err == nil {
-			log.Printf("wrote batch: %d, %d, ... %d", start, start+cfg.Partitions, start+cfg.Partitions*(len(messageBatch)-1))
+			log.Printf("wrote batch: %d, %d, ... %d", start, start+opts.Partitions, start+opts.Partitions*(len(messageBatch)-1))
 			return len(messageBatch)
 		}
 		log.Printf("failed to write batch: %+v. retrying after waiting...\n", results[0].Err)

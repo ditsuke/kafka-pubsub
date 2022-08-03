@@ -9,8 +9,8 @@ import (
 	"os/signal"
 )
 
-func ReadFromKafka(cfg Config) {
-	brokerSeeds := []string{fmt.Sprintf("%s:%d", cfg.KafkaHost, cfg.KafkaPort)}
+func ReadFromKafka(opts SubOptions) {
+	brokerSeeds := []string{fmt.Sprintf("%s:%d", opts.KafkaHost, opts.KafkaPort)}
 
 	// Create a new kafka client to back a consumer group
 	// This consumer group will read from the topic written by the writer/producer
@@ -20,13 +20,13 @@ func ReadFromKafka(cfg Config) {
 	kClient, err := kgo.NewClient(
 		kgo.SeedBrokers(brokerSeeds...),
 		kgo.ConsumerGroup("some-consumer-group"),
-		kgo.ConsumeTopics(cfg.Topic),
+		kgo.ConsumeTopics(opts.Topic),
 	)
 	if err != nil {
 		panic(fmt.Errorf("failed to create kafka client: %+v", err))
 	}
 
-	go consume(kClient, cfg)
+	go consume(kClient, opts)
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, os.Interrupt)
@@ -47,12 +47,12 @@ func ReadFromKafka(cfg Config) {
 	}
 }
 
-func consume(kClient *kgo.Client, cfg Config) {
+func consume(kClient *kgo.Client, opts SubOptions) {
 	var read int
 	for {
 		records := kClient.PollFetches(context.Background())
 		if records.IsClientClosed() {
-			log.Printf("=== read %d records from topic %s", read, cfg.Topic)
+			log.Printf("=== read %d records from topic %s", read, opts.Topic)
 			return
 		}
 		records.EachError(func(topic string, partition int32, err error) {

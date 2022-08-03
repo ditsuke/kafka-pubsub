@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	var cfg ps.Config
+	var cfg ps.SubOptions
 
 	flags := flag.NewFlagSet("", flag.ExitOnError)
 	flags.StringVar(&cfg.KafkaHost, "kafka-host", "localhost", "kafka host")

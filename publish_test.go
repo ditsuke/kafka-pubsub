@@ -8,18 +8,20 @@ import (
 	"testing"
 )
 
-func benchmarkWriteToKafka(cfg ps.Config, b *testing.B) {
+func benchmarkWriteToKafka(cfg ps.PubOptions, b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ps.WriteToKafka(cfg)
 	}
 }
 
-func defaultConfig() ps.Config {
-	return ps.Config{
-		KafkaHost:  "localhost",
-		KafkaPort:  9092,
-		Topic:      "test-bench",
-		Partitions: 3,
+func defaultConfig() ps.PubOptions {
+	return ps.PubOptions{
+		Options: ps.Options{
+			KafkaHost:  "localhost",
+			KafkaPort:  9092,
+			Topic:      "test-bench",
+			Partitions: 3,
+		},
 	}
 }
 
