@@ -100,7 +100,7 @@ func WriteMessageBatchWithRetries(start int, kClient *kgo.Client, cfg Config) in
 			log.Printf("wrote batch: %d, %d, ... %d", start, start+cfg.Partitions, start+cfg.Partitions*(len(messageBatch)-1))
 			return len(messageBatch)
 		}
-		log.Printf("failed to write batch. retrying after waiting...")
+		log.Printf("failed to write batch: %+v. retrying after waiting...\n", results[0].Err)
 		time.Sleep(waitOnWriteFailure)
 	}
 	panic("failed to write message after retries")
