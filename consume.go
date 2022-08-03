@@ -58,10 +58,13 @@ type topicPartition struct {
 	partition int32
 }
 
+// splitTopicConsumer is a consumer that fetches records from a topic and delegates them to concurrent consumers for each partition.
 type splitTopicConsumer struct {
 	pcs map[topicPartition]*partitionConsumer
 
-	stopPolling    context.CancelFunc
+	// stopPolling stops the consumer from polling for new records.
+	stopPolling context.CancelFunc
+
 	quit           chan struct{}
 	doneProcessing chan struct{}
 }
@@ -72,7 +75,6 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) {
 	// Create a new kafka client to back a consumer group
 	// This consumer group will read from the topic written by the writer/producer
 	// All partitions will have single concurrent consumers within the group
-	// @todo to guarantee read-once semantics we need to disable auto-commit. Disabling auto-commit requires some
 	//  adjustments to guarantee read-once.
 	kClient, err := kgo.NewClient(
 		kgo.SeedBrokers(brokerSeeds...),
@@ -88,19 +90,19 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) {
 		panic(fmt.Errorf("failed to create kafka client: %+v", err))
 	}
 
-	pollingCtx, cancelFunc := context.WithCancel(context.Background())
+	pollCtx, cancelFunc := context.WithCancel(context.Background())
 	tc.stopPolling = cancelFunc
 	var read int
 	for {
-		records := kClient.PollFetches(pollingCtx)
-		if records.IsClientClosed() || pollingCtx.Err() != nil {
+		fetches := kClient.PollFetches(pollCtx)
+		if fetches.IsClientClosed() || pollCtx.Err() != nil {
 			break
 		}
-		records.EachError(func(topic string, partition int32, err error) {
+		fetches.EachError(func(topic string, partition int32, err error) {
 			log.Printf("fetch error: topic %s, partition %d, error: %v\n", topic, partition, err)
 		})
 
-		records.EachPartition(func(partition kgo.FetchTopicPartition) {
+		fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
 			pc, ok := tc.pcs[topicPartition{opts.Topic, partition.Partition}]
 			if !ok {
 				panic(fmt.Errorf("could not find partition consumer t=%s p=%d", opts.Topic, partition.Partition))
@@ -109,12 +111,14 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) {
 			read += len(partition.Records)
 		})
 	}
+	// Allow the consumer group to re-balance (as we're done consuming)
 	kClient.AllowRebalance()
 	kClient.Close()
 	close(tc.doneProcessing)
-	log.Printf("=== read %d records from topic %s", read, opts.Topic)
+	log.Printf("read %d records from topic %s", read, opts.Topic)
 }
 
+// stopPartitionConsumers stops all topic consumers. This function blocks until all topic consumers have stopped.
 func (tc *splitTopicConsumer) stopPartitionConsumers() {
 	wg := sync.WaitGroup{}
 	for tp, pc := range tc.pcs {
