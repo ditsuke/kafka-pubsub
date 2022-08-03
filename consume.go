@@ -109,6 +109,7 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) {
 			read += len(partition.Records)
 		})
 	}
+	kClient.AllowRebalance()
 	kClient.Close()
 	close(tc.doneProcessing)
 	log.Printf("=== read %d records from topic %s", read, opts.Topic)
