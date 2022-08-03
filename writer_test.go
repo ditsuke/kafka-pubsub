@@ -2,20 +2,20 @@ package kafka_task_test
 
 import (
 	"fmt"
-	"kafka-task"
+	ps "github.com/ditsuke/kafka-pubsub"
 	"log"
 	"os"
 	"testing"
 )
 
-func benchmarkWriteToKafka(cfg kafka_task.Config, b *testing.B) {
+func benchmarkWriteToKafka(cfg ps.Config, b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		kafka_task.WriteToKafka(cfg)
+		ps.WriteToKafka(cfg)
 	}
 }
 
-func defaultConfig() kafka_task.Config {
-	return kafka_task.Config{
+func defaultConfig() ps.Config {
+	return ps.Config{
 		KafkaHost:  "localhost",
 		KafkaPort:  9092,
 		Topic:      "test-bench",

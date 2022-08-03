@@ -1,4 +1,4 @@
-module kafka-task
+module github.com/ditsuke/kafka-pubsub
 
 go 1.18
 

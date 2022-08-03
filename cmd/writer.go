@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"kafka-task"
+	ps "github.com/ditsuke/kafka-pubsub"
 	"log"
 	"os"
 )
@@ -17,7 +17,7 @@ const (
 )
 
 func main() {
-	var cfg kafka_task.Config
+	var cfg ps.Config
 	flags := flag.NewFlagSet("", flag.ExitOnError)
 	flags.StringVar(&cfg.KafkaHost, "kafka-host", defaultKafkaHost, "kafka host")
 	flags.IntVar(&cfg.KafkaPort, "kafka-port", defaultKafkaPort, "kafka port")
@@ -31,5 +31,5 @@ func main() {
 	}
 
 	log.Printf("configured: %+v\n", cfg)
-	kafka_task.WriteToKafka(cfg)
+	ps.WriteToKafka(cfg)
 }
