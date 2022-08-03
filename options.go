@@ -24,4 +24,5 @@ type PubOptions struct {
 
 type SubOptions struct {
 	Options
+	Group string
 }
