@@ -1,4 +1,4 @@
-package kafka_task_test
+package kafka_pubsub_test
 
 import (
 	"fmt"

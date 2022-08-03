@@ -1,4 +1,4 @@
-package kafka_task
+package kafka_pubsub
 
 import (
 	"context"
