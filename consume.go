@@ -66,6 +66,7 @@ type splitTopicConsumer struct {
 	stopPolling context.CancelFunc
 
 	quit           chan struct{}
+	donePolling    chan struct{}
 	doneProcessing chan struct{}
 }
 
@@ -111,6 +112,7 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) {
 			read += len(partition.Records)
 		})
 	}
+	close(tc.donePolling)
 	// Allow the consumer group to re-balance (as we're done consuming)
 	kClient.AllowRebalance()
 	kClient.Close()
@@ -136,6 +138,7 @@ func (tc *splitTopicConsumer) stopPartitionConsumers() {
 // stop the topic consumer. This will block until all the topic consumers have finished processing and stopped.
 func (tc *splitTopicConsumer) stop() {
 	tc.stopPolling()
+	<-tc.donePolling
 	log.Printf("stopped topic polling")
 	tc.stopPartitionConsumers()
 	log.Printf("stopped partition consumers")
@@ -187,6 +190,7 @@ func ReadFromKafka(opts SubOptions) {
 	topicConsumer := splitTopicConsumer{
 		pcs:            make(map[topicPartition]*partitionConsumer),
 		quit:           make(chan struct{}),
+		donePolling:    make(chan struct{}),
 		doneProcessing: make(chan struct{}),
 	}
 
