@@ -98,7 +98,6 @@ func packMessageBatch(size, start, jump, limit int, partitioner func(messageNumb
 		}
 		messages[i] = &kgo.Record{
 			Value:     []byte(strconv.Itoa(messageNumber)),
-			Key:       []byte(strconv.Itoa(messageNumber)),
 			Partition: partitioner(messageNumber),
 		}
 	}
