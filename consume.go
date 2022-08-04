@@ -27,10 +27,20 @@ type partitionConsumer struct {
 func (pc *partitionConsumer) consume() {
 batchLoop:
 	for {
+		// Keep track of the last offset we have consumed to guarantee EOS in case we fail to commit records after consuming them
+		var lastConsumedOffset int64
 		select {
 		case recs := <-pc.recs:
 			for _, rec := range recs {
+				if !(rec.Offset > lastConsumedOffset) {
+					// We have already consumed a greater offset -> skip consuming
+					log.Printf("SKIPPING consumption of t=%s p=%d message=%s; message_offset=%d current_offset=%d",
+						rec.Topic, rec.Partition, rec.Value, rec.Offset, lastConsumedOffset,
+					)
+					continue
+				}
 				log.Printf("consuming t=%s p=%d message=%s", pc.topic, pc.partition, rec.Value)
+				lastConsumedOffset = rec.Offset
 			}
 			err := pc.kClient.CommitRecords(context.Background(), recs...)
 			if err != nil {
