@@ -24,5 +24,10 @@ type PubOptions struct {
 
 type SubOptions struct {
 	Options
+
+	// Consumer group to join and consume from.
 	Group string
+
+	// Number of messages to consume
+	EventCount int
 }

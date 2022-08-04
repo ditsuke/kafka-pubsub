@@ -19,6 +19,7 @@ func main() {
 	flags.StringVar(&cfg.Topic, "topic", DefaultTopic, "topic to consume")
 	flags.StringVar(&cfg.Group, "group", DefaultConsumerGroup, "consumer group to use for consumption")
 	flags.BoolVar(&suppressLogs, "no-logs", false, "no logging to stdout")
+	flags.IntVar(&cfg.EventCount, "events-to-consume", DefaultEventsConsume, "number of events to consume. >=0 for unlimited.")
 	err := flags.Parse(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)

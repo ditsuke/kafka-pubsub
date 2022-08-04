@@ -10,6 +10,10 @@ import (
 	"sync"
 )
 
+const (
+	defaultMaxFetches = 100_000
+)
+
 // partitionConsumer instances consume records from a single partition. Records must be pushed into the
 // recs channel by a master consumer for a topic that delegates records to partition-specific consumers for increased throughput.
 type partitionConsumer struct {
@@ -80,7 +84,7 @@ type splitTopicConsumer struct {
 	doneProcessing chan struct{}
 }
 
-func (tc *splitTopicConsumer) consume(opts SubOptions) {
+func (tc *splitTopicConsumer) consume(opts SubOptions) int {
 	brokerSeeds := []string{fmt.Sprintf("%s:%d", opts.KafkaHost, opts.KafkaPort)}
 
 	// Create a new kafka client to back a consumer group
@@ -103,12 +107,22 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) {
 
 	pollCtx, cancelFunc := context.WithCancel(context.Background())
 	tc.stopPolling = cancelFunc
-	var read int
+	var eventsConsumed int
 	for {
-		fetches := kClient.PollFetches(pollCtx)
+		if eventsConsumed >= opts.EventCount && opts.EventCount > 0 {
+			break
+		}
+		maxFetches := func() int {
+			if opts.EventCount > 0 {
+				return opts.EventCount - eventsConsumed
+			}
+			return defaultMaxFetches
+		}()
+		fetches := kClient.PollRecords(pollCtx, maxFetches)
 		if fetches.IsClientClosed() || pollCtx.Err() != nil {
 			break
 		}
+
 		fetches.EachError(func(topic string, partition int32, err error) {
 			log.Printf("fetch error: topic %s, partition %d, error: %v\n", topic, partition, err)
 		})
@@ -119,15 +133,17 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) {
 				panic(fmt.Errorf("could not find partition consumer t=%s p=%d", opts.Topic, partition.Partition))
 			}
 			pc.recs <- partition.Records
-			read += len(partition.Records)
+			eventsConsumed += len(partition.Records)
 		})
 	}
 	close(tc.donePolling)
 	// Allow the consumer group to re-balance (as we're done consuming)
 	kClient.AllowRebalance()
 	kClient.Close()
+	tc.stopPartitionConsumers()
 	close(tc.doneProcessing)
-	log.Printf("read %d records from topic %s", read, opts.Topic)
+	log.Printf("read %d records from topic %s", eventsConsumed, opts.Topic)
+	return eventsConsumed
 }
 
 // stopPartitionConsumers stops all topic consumers. This function blocks until all topic consumers have stopped.
@@ -150,10 +166,8 @@ func (tc *splitTopicConsumer) stop() {
 	tc.stopPolling()
 	<-tc.donePolling
 	log.Printf("stopped topic polling")
-	tc.stopPartitionConsumers()
-	log.Printf("stopped partition consumers")
 	<-tc.doneProcessing
-	log.Printf("stopping kafka client")
+	log.Printf("stopping kafka client and topic consumers")
 }
 
 func (tc *splitTopicConsumer) assign(_ context.Context, kClient *kgo.Client, assigned map[string][]int32) {
@@ -196,7 +210,7 @@ func (tc *splitTopicConsumer) revoked(_ context.Context, _ *kgo.Client, removed 
 	}
 }
 
-func ReadFromKafka(opts SubOptions) {
+func ReadFromKafka(opts SubOptions) int {
 	topicConsumer := splitTopicConsumer{
 		pcs:            make(map[topicPartition]*partitionConsumer),
 		quit:           make(chan struct{}),
@@ -204,24 +218,35 @@ func ReadFromKafka(opts SubOptions) {
 		doneProcessing: make(chan struct{}),
 	}
 
-	go topicConsumer.consume(opts)
+	chanEventsConsumed := make(chan int)
+	go func() {
+		chanEventsConsumed <- topicConsumer.consume(opts)
+	}()
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, os.Interrupt)
 
-	// Block until we receive an OS signal
-	<-sig
-	done := make(chan struct{})
-	go func() {
-		topicConsumer.stop()
-		close(done)
-	}()
-
-	// Block until the kafka client is closed, or we receive a second OS signal to terminate immediately
+	// Block until we receive an OS signal or the consumer is done consuming on its own
+	consumerStopped := make(chan struct{})
 	select {
-	case <-done:
+	case <-sig:
+		go func() {
+			topicConsumer.stop()
+			close(consumerStopped)
+		}()
+	case eventsConsumed := <-chanEventsConsumed:
+		log.Println("required events have been consumed")
+		return eventsConsumed
+	}
+
+	// Block until the consumer has stopped, or we receive a second OS signal to terminate immediately
+	select {
+	case <-consumerStopped:
 		log.Println("kafka client closed")
+		eventsConsumed := <-chanEventsConsumed
+		return eventsConsumed
 	case <-sig:
 		log.Println("second interrupt received, exiting")
+		return 0
 	}
 }
