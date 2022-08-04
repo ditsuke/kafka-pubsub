@@ -3,8 +3,8 @@ package kafka_pubsub_test
 import (
 	"fmt"
 	ps "github.com/ditsuke/kafka-pubsub"
+	"io/ioutil"
 	"log"
-	"os"
 	"testing"
 )
 
@@ -25,17 +25,14 @@ func defaultConfig() ps.PubOptions {
 	}
 }
 
-func BenchmarkWriteToKafka(b *testing.B) {
-	eventCount := 99
+func BenchmarkWriteToKafka_100(b *testing.B) {
+	const eventCount = 100
 	batchSizeMin := 1
 	batchSizeMax := 250
 	stepSize := 20
 
-	logFile, err := os.OpenFile("logfile.txt", os.O_APPEND, 0755)
-	if err != nil {
-		b.Fatalf("could not open log file: %+v", err)
-	}
-	log.SetOutput(logFile)
+	// Discard logs (?: maybe a flag/opt to customise)
+	log.SetOutput(ioutil.Discard)
 
 	for batchSize := batchSizeMin; batchSize <= batchSizeMax; batchSize += stepSize {
 		b.Run(fmt.Sprintf("batch_size=%d", batchSize), func(b *testing.B) {
