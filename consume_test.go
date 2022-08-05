@@ -25,8 +25,13 @@ func defaultSubOpts(topicSuffix string) ps.SubOptions {
 
 func BenchmarkReadFromKafka_10_000(b *testing.B) {
 	const (
-		optimalBatchSize = 120
+		// OptimalBatchSize as observed from the publisher benchmark
+		optimalBatchSize = 400
+
+		// Events to read
+		eventCount = 100_000
 	)
+
 	// Topic suffix to make sure we are writing to a new topic
 	rand.Seed(time.Now().Unix())
 	topicSuffix := fmt.Sprintf("%d", rand.Int())
@@ -44,8 +49,10 @@ func BenchmarkReadFromKafka_10_000(b *testing.B) {
 
 	// Setup
 	opts := defaultSubOpts(topicSuffix)
-	opts.EventCount = 10_000
+	opts.EventCount = eventCount
 	for i := 0; i < b.N; i++ {
 		ps.ReadFromKafka(opts)
 	}
+
+	b.ReportMetric(float64(eventCount), "messages read")
 }

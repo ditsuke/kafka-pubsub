@@ -10,12 +10,6 @@ import (
 	"time"
 )
 
-func benchmarkWriteToKafka(cfg ps.PubOptions, b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		ps.WriteToKafka(cfg)
-	}
-}
-
 func defaultPubOpts(topicSuffix string) ps.PubOptions {
 	return ps.PubOptions{
 		Options: ps.Options{
@@ -27,12 +21,12 @@ func defaultPubOpts(topicSuffix string) ps.PubOptions {
 	}
 }
 
-func BenchmarkWriteToKafka_100(b *testing.B) {
+func BenchmarkWriteToKafka_1000(b *testing.B) {
 	const (
-		eventCount   = 100
-		batchSizeMin = 1
-		batchSizeMax = 250
-		stepSize     = 20
+		eventCount   = 10_000
+		batchSizeMin = 100
+		batchSizeMax = 2000
+		stepSize     = 100
 	)
 
 	// Topic suffix to make sure we are writing to a new topic
@@ -48,7 +42,11 @@ func BenchmarkWriteToKafka_100(b *testing.B) {
 			opts.EventCount = eventCount
 			opts.BatchSize = batchSize
 
-			benchmarkWriteToKafka(opts, b)
+			for i := 0; i < b.N; i++ {
+				ps.WriteToKafka(opts)
+			}
+
+			b.ReportMetric(float64(batchSize), "messages written")
 		})
 	}
 }
