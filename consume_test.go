@@ -54,5 +54,5 @@ func BenchmarkReadFromKafka_10_000(b *testing.B) {
 		ps.ReadFromKafka(opts)
 	}
 
-	b.ReportMetric(float64(eventCount), "messages read")
+	b.ReportMetric(float64(eventCount), "reads/op")
 }

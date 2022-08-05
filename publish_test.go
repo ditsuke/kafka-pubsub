@@ -46,7 +46,7 @@ func BenchmarkWriteToKafka_1000(b *testing.B) {
 				ps.WriteToKafka(opts)
 			}
 
-			b.ReportMetric(float64(batchSize), "messages written")
+			b.ReportMetric(float64(eventCount), "writes/op")
 		})
 	}
 }
