@@ -19,14 +19,18 @@ import (
 )
 
 const (
-	// optimalBatchSize as observed from the publisher benchmark
-	optimalBatchSize = 400
+	// testBatchSize is the producer batch size we'll use for benchmarking. In theory, higher batch sizes are always
+	// better. However, in a real-world system batch-size is a trade-off between throughput and latency, with the
+	// optimisation factor being how fast the kind of producer we're targeting produces messages to batch up.
+	// In our case, we're targeting a producer that can theoretically produce millions of messages per second (it's just a loop),
+	// so higher batch sizes will always appear to work better within the confines of hardware and network constraints.
+	testBatchSize = 2000
 
 	// Number of events to use as a sample size in the independent subscriber benchmark
-	consumptionSampleSize = 100_000
+	consumptionSampleSize = 500_000
 
 	// Number of events to use as a sample size in the independent publisher benchmark
-	publishSampleSize = 10_000
+	publishSampleSize = 1_000_000
 )
 
 func main() {
@@ -50,7 +54,7 @@ func benchmarkConsumer(topicSuffix string) {
 	// Publish 10M events to Kafka
 	pubOpts := defaultPubOpts(topicSuffix)
 	pubOpts.EventCount = consumptionSampleSize * 100
-	pubOpts.BatchSize = optimalBatchSize
+	pubOpts.BatchSize = testBatchSize
 	ps.WriteToKafka(pubOpts)
 
 	opts := defaultSubOpts(topicSuffix)
