@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	ps "github.com/ditsuke/kafka-pubsub"
 	. "github.com/ditsuke/kafka-pubsub/cmd/internal"
 	"io/ioutil"
@@ -31,5 +32,8 @@ func main() {
 		log.SetOutput(ioutil.Discard)
 	}
 	log.Printf("configured: %+v\n", cfg)
-	ps.WriteToKafka(cfg)
+	err = ps.WriteToKafka(cfg)
+	if err != nil {
+		panic(fmt.Errorf("error publishing: %+v", err))
+	}
 }
