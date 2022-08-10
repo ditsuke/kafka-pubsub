@@ -8,6 +8,7 @@ package main
 // data from the benchmark results.
 
 import (
+	"context"
 	"fmt"
 	ps "github.com/ditsuke/kafka-pubsub"
 	"io/ioutil"
@@ -55,14 +56,20 @@ func benchmarkConsumer(topicSuffix string) {
 	pubOpts := defaultPubOpts(topicSuffix)
 	pubOpts.EventCount = consumptionSampleSize * 100
 	pubOpts.BatchSize = testBatchSize
-	ps.WriteToKafka(pubOpts)
+	err := ps.WriteToKafka(context.Background(), pubOpts)
+	if err != nil {
+		panic(fmt.Errorf("error writing: %+v", err))
+	}
 
 	opts := defaultSubOpts(topicSuffix)
 	opts.EventCount = consumptionSampleSize
 
 	result := testing.Benchmark(func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			ps.ReadFromKafka(opts)
+			_, err := ps.ReadFromKafka(context.Background(), opts)
+			if err != nil {
+				b.Fatal(fmt.Errorf("error reading: %+v", err))
+			}
 		}
 	})
 
@@ -98,7 +105,10 @@ func benchmarkPublisher(topicSuffix string) {
 
 		result := testing.Benchmark(func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				ps.WriteToKafka(opts)
+				err := ps.WriteToKafka(context.Background(), opts)
+				if err != nil {
+					b.Fatal(fmt.Errorf("error writing: %+v", err))
+				}
 			}
 		})
 

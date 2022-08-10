@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"log"
-	"os"
-	"os/signal"
 	"sync"
 )
 
@@ -84,13 +82,13 @@ type splitTopicConsumer struct {
 	doneProcessing chan struct{}
 }
 
-func (tc *splitTopicConsumer) consume(opts SubOptions) int {
+func (tc *splitTopicConsumer) consume(ctx context.Context, opts SubOptions) (int, error) {
 	brokerSeeds := []string{fmt.Sprintf("%s:%d", opts.KafkaHost, opts.KafkaPort)}
 
 	// Create a new kafka client to back a consumer group
 	// This consumer group will read from the topic written by the writer/producer
 	// All partitions will have single concurrent consumers within the group
-	//  adjustments to guarantee read-once.
+	// adjustments to guarantee read-once.
 	kClient, err := kgo.NewClient(
 		kgo.SeedBrokers(brokerSeeds...),
 		kgo.ConsumerGroup("some-consumer-group"),
@@ -102,14 +100,15 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) int {
 		kgo.OnPartitionsLost(tc.revoked),
 	)
 	if err != nil {
-		panic(fmt.Errorf("failed to create kafka client: %+v", err))
+		return 0, fmt.Errorf("failed to create kafka client: %+v", err)
 	}
 
-	pollCtx, cancelFunc := context.WithCancel(context.Background())
+	pollCtx, cancelFunc := context.WithCancel(ctx)
 	tc.stopPolling = cancelFunc
 	var eventsConsumed int
 	for {
-		if eventsConsumed >= opts.EventCount && opts.EventCount > 0 {
+		if (eventsConsumed >= opts.EventCount && opts.EventCount > 0) ||
+			pollCtx.Err() != nil {
 			break
 		}
 		maxFetches := func() int {
@@ -143,7 +142,7 @@ func (tc *splitTopicConsumer) consume(opts SubOptions) int {
 	tc.stopPartitionConsumers()
 	close(tc.doneProcessing)
 	log.Printf("read %d records from topic %s", eventsConsumed, opts.Topic)
-	return eventsConsumed
+	return eventsConsumed, nil
 }
 
 // stopPartitionConsumers stops all topic consumers. This function blocks until all topic consumers have stopped.
@@ -163,6 +162,7 @@ func (tc *splitTopicConsumer) stopPartitionConsumers() {
 
 // stop the topic consumer. This will block until all the topic consumers have finished processing and stopped.
 func (tc *splitTopicConsumer) stop() {
+	log.Printf("stopping topic consumer")
 	tc.stopPolling()
 	<-tc.donePolling
 	log.Printf("stopped topic polling")
@@ -210,7 +210,7 @@ func (tc *splitTopicConsumer) revoked(_ context.Context, _ *kgo.Client, removed 
 	}
 }
 
-func ReadFromKafka(opts SubOptions) int {
+func ReadFromKafka(ctx context.Context, opts SubOptions) (int, error) {
 	topicConsumer := splitTopicConsumer{
 		pcs:            make(map[topicPartition]*partitionConsumer),
 		quit:           make(chan struct{}),
@@ -218,35 +218,34 @@ func ReadFromKafka(opts SubOptions) int {
 		doneProcessing: make(chan struct{}),
 	}
 
-	chanEventsConsumed := make(chan int)
+	type consumerResponse struct {
+		consumed int
+		err      error
+	}
+	chanConsumerDone := make(chan struct{})
+	chanConsumerResponse := make(chan consumerResponse)
 	go func() {
-		chanEventsConsumed <- topicConsumer.consume(opts)
+		consumed, err := topicConsumer.consume(ctx, opts)
+		chanConsumerResponse <- consumerResponse{consumed, err}
+		close(chanConsumerDone)
 	}()
 
-	sig := make(chan os.Signal)
-	signal.Notify(sig, os.Interrupt)
-
-	// Block until we receive an OS signal or the consumer is done consuming on its own
-	consumerStopped := make(chan struct{})
-	select {
-	case <-sig:
-		go func() {
+	// Stop consumers on context cancellation.
+	go func() {
+		select {
+		case <-ctx.Done():
+			log.Printf("context cancelled, stopping topic consumer...")
 			topicConsumer.stop()
-			close(consumerStopped)
-		}()
-	case eventsConsumed := <-chanEventsConsumed:
-		log.Println("required events have been consumed")
-		return eventsConsumed
-	}
+			close(chanConsumerDone)
+		case <-chanConsumerDone:
+		}
+		log.Println("topic consumer stopped apparently")
+	}()
 
 	// Block until the consumer has stopped, or we receive a second OS signal to terminate immediately
-	select {
-	case <-consumerStopped:
-		log.Println("kafka client closed")
-		eventsConsumed := <-chanEventsConsumed
-		return eventsConsumed
-	case <-sig:
-		log.Println("second interrupt received, exiting")
-		return 0
-	}
+	<-chanConsumerDone
+	log.Println("consumer has stopped")
+	consumerYield := <-chanConsumerResponse
+	return consumerYield.consumed, consumerYield.err
+
 }
